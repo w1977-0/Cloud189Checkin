@@ -9,7 +9,12 @@ const accounts = require("../accounts");
 const { mask, delay } = require("./utils");
 const push = require("./push");
 const { log4js, cleanLogs, catLogs } = require("./logger");
-const tokenDir = ".token";
+// token 目录：云函数等只读环境下用 TOKEN_DIR 指到 /tmp，本地保持 .token
+const tokenDir = process.env.TOKEN_DIR || ".token";
+
+// 只要有一个账号出错，最后就把退出码置 1，
+// 免得脚本自己吞掉异常后，宿主环境（GitHub Actions / 云函数）还显示成功
+let hasFailure = false;
 
 sdkLogger.configure({
   isDebugEnabled: process.env.CLOUD189_VERBOSE === "1",
@@ -40,6 +45,7 @@ const run = async (userName, password, userSizeInfoMap, logger) => {
       });
       await Promise.all([doUserTask(cloudClient, logger)]);
     } catch (e) {
+      hasFailure = true;
       if (e.response) {
         logger.log(`请求失败: ${e.response.statusCode}, ${e.response.body}`);
       } else {
@@ -103,7 +109,7 @@ async function main() {
   }
 }
 
-(async () => {
+const start = async () => {
   try {
     await main();
     //等待日志文件写入
@@ -112,8 +118,21 @@ async function main() {
     const logs = catLogs();
     const events = recording.replay();
     const content = events.map((e) => `${e.data.join("")}`).join("  \n");
-    push("天翼云盘自动签到任务", logs + content);
+    await push("天翼云盘自动签到任务", logs + content);
     recording.erase();
     cleanLogs();
+    // log4js 的 file appender 带着定时器，不关掉进程会一直挂着不退出
+    // （云函数里这会一直耗到超时）
+    await new Promise((resolve) => log4js.shutdown(resolve));
+    if (hasFailure) {
+      process.exitCode = 1;
+    }
   }
-})();
+};
+
+// 本地 `npm start` 直接跑；云函数等宿主环境可以 require 之后自己调用
+if (require.main === module) {
+  start();
+}
+
+module.exports = start;
