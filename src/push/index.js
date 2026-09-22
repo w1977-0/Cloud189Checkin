@@ -8,6 +8,7 @@ const pushPlus = require("./pushPlus");
 const wpush = require("./wpush");
 const bark = require("./bark");
 const showDoc = require("./showDoc");
+const feishuBot = require("./feishuBot");
 
 const logger = log4js.getLogger("push");
 logger.addContext("user", "push");
@@ -215,6 +216,43 @@ const pushShowDoc = (title, desp) => {
     });
 };
 
+const pushFeishuBot = (title, desp) => {
+  if (!feishuBot.webhook) {
+    return;
+  }
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  // 飞书单条文本消息有长度上限，超了会被拒绝，这里先截断
+  const text =
+    desp.length > 20000 ? `${desp.slice(0, 20000)}\n...(内容过长已截断)` : desp;
+  const data = {
+    timestamp,
+    msg_type: "text",
+    content: {
+      text: `${title}\n\n${text}`,
+    },
+  };
+  const sign = feishuBot.sign(timestamp);
+  if (sign) {
+    data.sign = sign;
+  }
+  superagent
+    .post(feishuBot.webhook)
+    .send(data)
+    .then((res) => {
+      const body = res.body || {};
+      // 新版返回 StatusCode，旧版返回 code，两者为 0 才算成功
+      if (body.code === 0 || body.StatusCode === 0) {
+        logger.info("飞书机器人推送成功");
+      } else {
+        logger.error(`飞书机器人推送失败:${JSON.stringify(body)}`);
+      }
+    })
+    .catch((err) => {
+      const msg = err.response?.text || err.message || "unknown error";
+      logger.error(`飞书机器人推送失败:${msg}`);
+    });
+};
+
 const push = (title, desp) => {
   pushServerChan(title, desp);
   pushTelegramBot(title, desp);
@@ -224,6 +262,7 @@ const push = (title, desp) => {
   pushWPush(title, desp);
   pushBark(title, desp);
   pushShowDoc(title, desp);
+  pushFeishuBot(title, desp);
 };
 
 module.exports = push;
